@@ -8,7 +8,7 @@ from loguru import logger
 from tabulate import tabulate
 from termcolor import cprint
 
-URL = "https://api.getgrass.io/airdropAllocations?input=%7B%22walletAddress%22:%225{}%22%7D"
+URL = "https://api.getgrass.io/airdropAllocations?input=%7B%22walletAddress%22:%22{}%22%7D"
 PROXIES_FILE_PATH = "data/proxies.txt"
 ADDRESSES_FILE_PATH = "data/addresses.txt"
 EXPORT_FILE_PATH = "data/result.csv"
@@ -45,7 +45,14 @@ def get_proxy_connector(proxy: Optional[str]) -> Optional[ProxyConnector]:
     return None
 
 
-async def is_eligible(wallet_address: str, proxy: Optional[str]) -> bool:
+def sum_data_values(response: dict) -> float:
+    data = response.get("result", {}).get("data", {})
+    total_sum = sum(data.values())
+
+    return round(total_sum, ndigits=3)
+
+
+async def check_eligibility(wallet_address: str, proxy: Optional[str]) -> tuple[bool, float]:
     try:
         response = await send_get_request(
             url=URL.format(wallet_address),
@@ -53,23 +60,23 @@ async def is_eligible(wallet_address: str, proxy: Optional[str]) -> bool:
         )
     except Exception as e:
         logger.exception(f"{wallet_address} Request failed: {e}")
-        return False
+        return False, 0.0
 
     if response is None:
         logger.error(f"Status code was not 200, skipping wallet: {wallet_address}")
-        return False
+        return False, 0.0
 
     result = response.get("result")
 
     if result is None:
         logger.error(f"Wallet {wallet_address} is not eligible")
-        return False
+        return False, 0.0
 
     if isinstance(result, dict) and not result:
         logger.error(f"Wallet {wallet_address} is not eligible")
-        return False
+        return False, 0.0
 
-    return True
+    return True, sum_data_values(response=response)
 
 
 async def check_wallets() -> None:
@@ -79,10 +86,10 @@ async def check_wallets() -> None:
     results = []
 
     for address, proxy in zip_longest(addresses, proxies):
-        status = await is_eligible(wallet_address=address, proxy=proxy)
-        results.append([address, "Yes" if status else "No"])
+        status, amount = await check_eligibility(wallet_address=address, proxy=proxy)
+        results.append([address, "Yes" if status else "No", amount])
 
-    headers = ["Address", "Is eligible"]
+    headers = ["Address", "Is eligible", "Amount"]
 
     cprint(tabulate(tabular_data=results, headers=headers, tablefmt="pretty"), color="red")
     export_to_csv(file_path=EXPORT_FILE_PATH, headers=headers, data=results)
